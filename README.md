@@ -8,6 +8,8 @@ Aplicação em Python + Streamlit para cadastrar componentes, acompanhar preços
 - Atualização manual de preços.
 - Atualização automática preparada para GitHub Actions.
 - Histórico de preços com gráfico.
+- Comparador de várias lojas por peça, incluindo preço, frete e total.
+- Seleção da menor oferta para alimentar as montagens.
 - Montagens de PC com quantidades e total.
 - Montagens ordenadas do menor para o maior valor.
 - Banco de dados Supabase.
@@ -30,6 +32,10 @@ O projeto usa as tabelas já existentes:
 Para habilitar montagens, execute no SQL Editor do Supabase:
 
 `migrations/002_montagens.sql`
+
+Para habilitar o comparador de ofertas, execute também:
+
+`migrations/003_ofertas.sql`
 
 ## Secrets do Streamlit
 
