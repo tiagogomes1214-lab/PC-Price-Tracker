@@ -4,20 +4,25 @@ import streamlit as st
 from banco import (
     adicionar_peca,
     adicionar_peca_montagem,
-    atualizar_preco,
+    aplicar_melhor_oferta,
+    criar_alerta,
     criar_montagem,
+    editar_peca,
+    excluir_alerta,
     excluir_montagem,
+    excluir_oferta,
     excluir_peca,
+    listar_alertas,
     listar_montagens,
+    listar_ofertas,
     listar_pecas,
     listar_pecas_montagem,
     pegar_historico,
     remover_peca_montagem,
-    listar_ofertas,
     salvar_oferta,
-    excluir_oferta,
-    aplicar_melhor_oferta,
 )
+from buscador import PROVEDORES, buscar_ofertas
+from compatibilidade import verificar_compatibilidade
 from precos import buscar_preco
 
 
@@ -52,10 +57,8 @@ def formatar_real(valor):
     return f"R$ {texto}"
 
 
-def atualizar_uma_peca(peca):
-    novo_preco = buscar_preco(peca["link"])
-    alterou = atualizar_preco(peca["id"], novo_preco)
-    return novo_preco, alterou
+def numero_opcional(valor):
+    return float(valor) if valor and float(valor) > 0 else None
 
 
 st.set_page_config(
@@ -65,34 +68,93 @@ st.set_page_config(
 )
 
 st.title("🖥️ PC Price Tracker")
-st.caption("Peças, montagens e histórico de preços em um só lugar.")
+st.caption(
+    "Monte PCs, compare lojas, acompanhe preços e valide compatibilidade."
+)
 
-aba_pecas, aba_comparador, aba_montagens, aba_historico = st.tabs(
-    ["Peças", "Comparador", "Montagens", "Histórico"]
+(
+    aba_pecas,
+    aba_busca,
+    aba_montagens,
+    aba_compatibilidade,
+    aba_historico,
+    aba_alertas,
+) = st.tabs(
+    [
+        "Peças",
+        "Buscar preços",
+        "Montagens",
+        "Compatibilidade",
+        "Histórico",
+        "Alertas",
+    ]
 )
 
 pecas = listar_pecas()
 
 
 with aba_pecas:
-    st.subheader("Cadastrar peça")
+    st.subheader("Cadastrar componente")
 
-    with st.form("form_nova_peca", clear_on_submit=True):
-        col1, col2 = st.columns(2)
+    with st.form("nova_peca", clear_on_submit=True):
+        c1, c2 = st.columns(2)
 
-        with col1:
-            tipo = st.selectbox("Tipo da peça", TIPOS)
-            nome = st.text_input("Nome da peça")
-            loja = st.text_input("Loja")
+        with c1:
+            tipo = st.selectbox("Tipo", TIPOS)
+            nome = st.text_input("Nome", placeholder="Ex.: RTX 5060 AERO OC 8GB")
+            fabricante = st.text_input("Fabricante", placeholder="Ex.: Gigabyte")
+            modelo = st.text_input("Modelo", placeholder="Ex.: RTX 5060 AERO OC")
+            mpn = st.text_input(
+                "MPN / código do fabricante",
+                placeholder="Ex.: GV-N5060AERO-OC-8GD",
+            )
+            gtin = st.text_input("GTIN / EAN (opcional)")
 
-        with col2:
-            link = st.text_input("Link do produto")
+        with c2:
+            loja = st.text_input("Loja atual")
+            link = st.text_input("Link atual")
             preco = st.number_input(
                 "Preço atual",
                 min_value=0.0,
                 step=10.0,
                 format="%.2f",
             )
+
+            with st.expander("Dados de compatibilidade"):
+                socket = st.text_input("Socket", placeholder="AM4, AM5, LGA1700...")
+                memoria_tipo = st.text_input(
+                    "Tipo de memória",
+                    placeholder="DDR4 ou DDR5",
+                )
+                formato = st.text_input(
+                    "Formato",
+                    placeholder="ATX, mATX, Mini-ITX...",
+                )
+                potencia_w = st.number_input(
+                    "Potência da fonte (W)",
+                    min_value=0.0,
+                    step=50.0,
+                )
+                comprimento_mm = st.number_input(
+                    "Comprimento da GPU (mm)",
+                    min_value=0.0,
+                    step=10.0,
+                )
+                gpu_max_mm = st.number_input(
+                    "Máximo de GPU do gabinete (mm)",
+                    min_value=0.0,
+                    step=10.0,
+                )
+                psu_recomendada_w = st.number_input(
+                    "Fonte recomendada pela GPU (W)",
+                    min_value=0.0,
+                    step=50.0,
+                )
+                formatos_suportados = st.text_input(
+                    "Formatos suportados pelo gabinete",
+                    placeholder="ATX, mATX, Mini-ITX",
+                )
+                observacoes = st.text_area("Observações")
 
         cadastrar = st.form_submit_button(
             "Adicionar peça",
@@ -111,82 +173,87 @@ with aba_pecas:
                 loja.strip(),
                 link.strip(),
                 preco,
+                fabricante=fabricante.strip(),
+                modelo=modelo.strip(),
+                mpn=mpn.strip(),
+                gtin=gtin.strip(),
+                socket=socket.strip(),
+                memoria_tipo=memoria_tipo.strip(),
+                formato=formato.strip(),
+                potencia_w=numero_opcional(potencia_w),
+                comprimento_mm=numero_opcional(comprimento_mm),
+                gpu_max_mm=numero_opcional(gpu_max_mm),
+                psu_recomendada_w=numero_opcional(psu_recomendada_w),
+                formatos_suportados=formatos_suportados.strip(),
+                observacoes=observacoes.strip(),
             )
-            st.success("Peça cadastrada com sucesso.")
+            st.success("Peça cadastrada.")
             st.rerun()
 
     pecas = listar_pecas()
-    total_pecas = sum(float(peca["preco"]) for peca in pecas)
 
-    col1, col2 = st.columns(2)
-    col1.metric("Peças cadastradas", len(pecas))
-    col2.metric("Soma de todas as peças", formatar_real(total_pecas))
-
-    if pecas and st.button("🔄 Atualizar todas as peças", use_container_width=True):
-        sucessos = 0
-        falhas = []
-
-        with st.spinner("Consultando as lojas..."):
-            for peca in pecas:
-                try:
-                    atualizar_uma_peca(peca)
-                    sucessos += 1
-                except Exception as erro:
-                    falhas.append(f"{peca['nome']}: {erro}")
-
-        if sucessos:
-            st.success(f"{sucessos} peça(s) consultada(s).")
-
-        if falhas:
-            st.warning("Algumas peças não puderam ser atualizadas:")
-            for falha in falhas:
-                st.write("•", falha)
-
-        st.rerun()
+    c1, c2 = st.columns(2)
+    c1.metric("Peças cadastradas", len(pecas))
+    c2.metric(
+        "Soma dos preços atuais",
+        formatar_real(sum(float(p["preco"]) for p in pecas)),
+    )
 
     st.divider()
-    st.subheader("Catálogo de peças")
-
-    if not pecas:
-        st.info("Nenhuma peça cadastrada ainda.")
 
     for peca in pecas:
         with st.container(border=True):
-            col_info, col_preco, col_acoes = st.columns([4, 2, 2])
+            c1, c2, c3 = st.columns([5, 2, 2])
 
-            with col_info:
+            with c1:
                 st.markdown(f"### {peca['nome']}")
                 st.write(f"**Tipo:** {peca['tipo']}")
-                st.write(f"**Loja:** {peca['loja']}")
+                st.write(f"**Loja atual:** {peca['loja']}")
+                detalhes = [
+                    peca.get("fabricante"),
+                    peca.get("modelo"),
+                    peca.get("mpn"),
+                ]
+                detalhes = [str(v) for v in detalhes if v]
+                if detalhes:
+                    st.caption(" • ".join(detalhes))
+
                 st.link_button(
-                    "Abrir produto na loja",
+                    "Abrir produto",
                     peca["link"],
                     use_container_width=True,
                 )
 
-            with col_preco:
+            with c2:
                 st.metric("Preço atual", formatar_real(peca["preco"]))
                 if peca.get("atualizado_em"):
-                    st.caption(f"Última consulta: {peca['atualizado_em']}")
+                    st.caption(f"Atualizado: {peca['atualizado_em']}")
 
-            with col_acoes:
+            with c3:
                 if st.button(
-                    "Atualizar preço",
-                    key=f"atualizar_{peca['id']}",
+                    "Atualizar link",
+                    key=f"update_preco_{peca['id']}",
                     use_container_width=True,
                 ):
                     try:
-                        novo_preco, alterou = atualizar_uma_peca(peca)
-                        if alterou:
-                            st.success(f"Novo preço: {formatar_real(novo_preco)}")
-                        else:
-                            st.info("O preço continua igual.")
+                        novo = buscar_preco(peca["link"])
+                        salvar_oferta(
+                            peca["id"],
+                            peca["loja"],
+                            peca["link"],
+                            novo,
+                            0,
+                            "automatico",
+                            produto_nome=peca["nome"],
+                            correspondencia=1.0,
+                        )
+                        aplicar_melhor_oferta(peca["id"])
                         st.rerun()
                     except Exception as erro:
-                        st.error(f"Não foi possível atualizar: {erro}")
+                        st.error(str(erro))
 
                 if st.button(
-                    "Excluir peça",
+                    "Excluir",
                     key=f"excluir_{peca['id']}",
                     use_container_width=True,
                 ):
@@ -194,353 +261,360 @@ with aba_pecas:
                     st.rerun()
 
 
-with aba_comparador:
-    st.subheader("Comparador de preços")
-    st.caption(
-        "Acompanhe várias ofertas da mesma peça e escolha automaticamente a mais barata."
-    )
+with aba_busca:
+    st.subheader("Buscar o menor preço em várias lojas")
 
     if not pecas:
-        st.info("Cadastre uma peça primeiro na aba Peças.")
+        st.info("Cadastre uma peça primeiro.")
     else:
-        opcoes_pecas = {
+        opcoes = {
             f"{p['tipo']} — {p['nome']}": p
             for p in pecas
         }
 
-        escolha_peca = st.selectbox(
-            "Peça para comparar",
-            list(opcoes_pecas.keys()),
-            key="comparador_peca",
+        chave = st.selectbox(
+            "Peça",
+            list(opcoes.keys()),
+            key="busca_peca",
+        )
+        peca = opcoes[chave]
+
+        lojas = st.multiselect(
+            "Lojas",
+            list(PROVEDORES.keys()),
+            default=list(PROVEDORES.keys()),
         )
 
-        peca_selecionada = opcoes_pecas[escolha_peca]
+        st.caption(
+            "MPN/modelo preenchidos melhoram bastante a identificação da peça correta."
+        )
 
-        try:
-            ofertas = listar_ofertas(peca_selecionada["id"])
-            banco_ofertas_ok = True
-        except Exception:
-            ofertas = []
-            banco_ofertas_ok = False
-
-        if not banco_ofertas_ok:
-            st.warning(
-                "A tabela de ofertas ainda não existe no Supabase. "
-                "Execute migrations/003_ofertas.sql no SQL Editor."
-            )
-        else:
-            with st.form("form_nova_oferta", clear_on_submit=True):
-                c1, c2 = st.columns(2)
-
-                with c1:
-                    loja_oferta = st.text_input("Loja")
-                    link_oferta = st.text_input("Link da oferta")
-
-                with c2:
-                    frete_oferta = st.number_input(
-                        "Frete (opcional)",
-                        min_value=0.0,
-                        value=0.0,
-                        step=5.0,
-                        format="%.2f",
-                    )
-                    preco_manual = st.number_input(
-                        "Preço manual (0 = tentar buscar automaticamente)",
-                        min_value=0.0,
-                        value=0.0,
-                        step=10.0,
-                        format="%.2f",
-                    )
-
-                adicionar_oferta = st.form_submit_button(
-                    "Adicionar oferta",
-                    use_container_width=True,
+        if st.button(
+            "🔎 Procurar ofertas",
+            use_container_width=True,
+        ):
+            with st.spinner("Consultando lojas..."):
+                resultados, erros = buscar_ofertas(
+                    peca,
+                    lojas=lojas,
+                    limite_por_loja=8,
                 )
 
-            if adicionar_oferta:
-                if not loja_oferta.strip() or not link_oferta.strip():
-                    st.warning("Preencha loja e link.")
-                else:
-                    try:
-                        if preco_manual > 0:
-                            preco_encontrado = preco_manual
-                            origem = "manual"
-                        else:
-                            preco_encontrado = buscar_preco(link_oferta.strip())
-                            origem = "automatico"
+            for oferta in resultados:
+                salvar_oferta(
+                    peca["id"],
+                    oferta["loja"],
+                    oferta["link"],
+                    oferta["preco"],
+                    oferta.get("frete") or 0,
+                    oferta.get("origem") or "busca",
+                    oferta.get("vendedor"),
+                    oferta.get("produto_nome"),
+                    oferta.get("identificador_externo"),
+                    oferta.get("correspondencia"),
+                )
 
-                        salvar_oferta(
-                            peca_selecionada["id"],
-                            loja_oferta.strip(),
-                            link_oferta.strip(),
-                            preco_encontrado,
-                            frete_oferta,
-                            origem,
-                        )
-                        st.success("Oferta adicionada.")
+            if resultados:
+                aplicar_melhor_oferta(peca["id"])
+                st.success(f"{len(resultados)} oferta(s) compatível(is) salva(s).")
+
+            if erros:
+                st.warning("Algumas lojas não puderam ser consultadas:")
+                for loja_nome, erro in erros.items():
+                    st.write(f"**{loja_nome}:** {erro}")
+
+            st.rerun()
+
+        ofertas = listar_ofertas(peca["id"])
+
+        if ofertas:
+            melhor = ofertas[0]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Melhor loja", melhor["loja"])
+            c2.metric("Preço + frete", formatar_real(melhor["preco_final"]))
+            c3.metric(
+                "Confiança",
+                f"{float(melhor.get('correspondencia') or 0) * 100:.0f}%",
+            )
+
+            if st.button(
+                "Aplicar melhor oferta à peça",
+                use_container_width=True,
+            ):
+                aplicar_melhor_oferta(peca["id"])
+                st.rerun()
+
+        for posicao, oferta in enumerate(ofertas, start=1):
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([5, 2, 2])
+
+                with c1:
+                    selo = "🏆 " if posicao == 1 else ""
+                    st.markdown(f"### {selo}{oferta['loja']}")
+                    if oferta.get("produto_nome"):
+                        st.write(oferta["produto_nome"])
+                    if oferta.get("vendedor"):
+                        st.caption(f"Vendedor: {oferta['vendedor']}")
+                    st.link_button(
+                        "Abrir oferta",
+                        oferta["link"],
+                        use_container_width=True,
+                    )
+
+                with c2:
+                    st.write("Produto:", formatar_real(oferta["preco"]))
+                    st.write("Frete:", formatar_real(oferta["frete"]))
+                    st.metric("Total", formatar_real(oferta["preco_final"]))
+
+                with c3:
+                    confianca = float(oferta.get("correspondencia") or 0)
+                    st.write(f"Correspondência: {confianca * 100:.0f}%")
+                    if st.button(
+                        "Excluir oferta",
+                        key=f"del_offer_{oferta['id']}",
+                    ):
+                        excluir_oferta(oferta["id"])
                         st.rerun()
-                    except Exception as erro:
-                        st.error(f"Não foi possível adicionar a oferta: {erro}")
 
-            ofertas = listar_ofertas(peca_selecionada["id"])
+        with st.expander("Adicionar oferta manualmente"):
+            with st.form("oferta_manual", clear_on_submit=True):
+                loja_manual = st.text_input("Loja")
+                link_manual = st.text_input("Link")
+                preco_manual = st.number_input(
+                    "Preço",
+                    min_value=0.0,
+                    step=10.0,
+                    format="%.2f",
+                )
+                frete_manual = st.number_input(
+                    "Frete",
+                    min_value=0.0,
+                    step=5.0,
+                    format="%.2f",
+                )
+                enviar = st.form_submit_button("Salvar")
 
-            if ofertas:
-                melhor = ofertas[0]
-
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Menor preço", formatar_real(melhor["preco"]))
-                c2.metric("Frete", formatar_real(melhor["frete"]))
-                c3.metric("Total", formatar_real(melhor["preco_final"]))
-
-                if st.button(
-                    "Usar menor oferta na montagem",
-                    use_container_width=True,
-                    key=f"aplicar_melhor_{peca_selecionada['id']}",
-                ):
-                    aplicar_melhor_oferta(peca_selecionada["id"])
-                    st.success("Menor oferta aplicada à peça.")
-                    st.rerun()
-
-                st.divider()
-
-            if not ofertas:
-                st.info("Ainda não há ofertas cadastradas para esta peça.")
-
-            for posicao, oferta in enumerate(ofertas, start=1):
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([4, 2, 2])
-
-                    with c1:
-                        selo = " 🏆" if posicao == 1 else ""
-                        st.markdown(f"### {oferta['loja']}{selo}")
-                        st.link_button(
-                            "Abrir oferta",
-                            oferta["link"],
-                            use_container_width=True,
-                        )
-                        st.caption(
-                            f"Origem: {oferta['origem']} • "
-                            f"Atualizado: {oferta['atualizado_em']}"
-                        )
-
-                    with c2:
-                        st.write("Produto:", formatar_real(oferta["preco"]))
-                        st.write("Frete:", formatar_real(oferta["frete"]))
-                        st.metric("Total", formatar_real(oferta["preco_final"]))
-
-                    with c3:
-                        if st.button(
-                            "Atualizar",
-                            key=f"atualizar_oferta_{oferta['id']}",
-                            use_container_width=True,
-                        ):
-                            try:
-                                novo_preco = buscar_preco(oferta["link"])
-                                salvar_oferta(
-                                    peca_selecionada["id"],
-                                    oferta["loja"],
-                                    oferta["link"],
-                                    novo_preco,
-                                    oferta["frete"],
-                                    "automatico",
-                                )
-                                st.rerun()
-                            except Exception as erro:
-                                st.error(str(erro))
-
-                        if st.button(
-                            "Excluir",
-                            key=f"excluir_oferta_{oferta['id']}",
-                            use_container_width=True,
-                        ):
-                            excluir_oferta(oferta["id"])
-                            st.rerun()
+            if enviar:
+                salvar_oferta(
+                    peca["id"],
+                    loja_manual.strip(),
+                    link_manual.strip(),
+                    preco_manual,
+                    frete_manual,
+                    "manual",
+                    produto_nome=peca["nome"],
+                    correspondencia=1.0,
+                )
+                aplicar_melhor_oferta(peca["id"])
+                st.rerun()
 
 
 with aba_montagens:
     st.subheader("Montagens de PC")
-    st.caption(
-        "Crie vários PCs e compare do mais barato ao mais caro usando os preços atuais das peças."
-    )
 
-    try:
-        montagens = listar_montagens()
-        banco_montagens_ok = True
-    except Exception:
-        montagens = []
-        banco_montagens_ok = False
+    with st.form("nova_montagem", clear_on_submit=True):
+        c1, c2 = st.columns(2)
 
-    if not banco_montagens_ok:
-        st.warning(
-            "As tabelas de montagens ainda não existem no Supabase. "
-            "Execute o arquivo migrations/002_montagens.sql no SQL Editor."
+        with c1:
+            nome_montagem = st.text_input(
+                "Nome",
+                placeholder="Ex.: PC Gamer até R$ 5.000",
+            )
+            faixa = st.selectbox("Categoria", FAIXAS)
+            orcamento = st.number_input(
+                "Orçamento máximo (0 = sem limite)",
+                min_value=0.0,
+                step=500.0,
+                format="%.2f",
+            )
+
+        with c2:
+            descricao = st.text_area("Descrição")
+
+        criar = st.form_submit_button(
+            "Criar montagem",
+            use_container_width=True,
         )
-    else:
-        with st.form("form_montagem", clear_on_submit=True):
-            col1, col2 = st.columns(2)
 
-            with col1:
-                nome_montagem = st.text_input(
-                    "Nome da montagem",
-                    placeholder="Ex.: PC Gamer de entrada",
-                )
-                faixa = st.selectbox("Categoria", FAIXAS)
-
-            with col2:
-                descricao = st.text_area(
-                    "Descrição",
-                    placeholder="Ex.: PC para Full HD, estudos e jogos competitivos.",
-                )
-
-            criar = st.form_submit_button(
-                "Criar montagem",
-                use_container_width=True,
+    if criar:
+        if not nome_montagem.strip():
+            st.warning("Digite um nome.")
+        else:
+            criar_montagem(
+                nome_montagem.strip(),
+                faixa,
+                descricao.strip(),
+                orcamento if orcamento > 0 else None,
             )
+            st.rerun()
 
-        if criar:
-            if not nome_montagem.strip():
-                st.warning("Digite um nome para a montagem.")
+    montagens = listar_montagens()
+    cards = []
+
+    for montagem in montagens:
+        itens = listar_pecas_montagem(montagem["id"])
+        total = sum(
+            float(i["pecas"]["preco"]) * int(i["quantidade"])
+            for i in itens
+            if i.get("pecas")
+        )
+        cards.append((total, montagem, itens))
+
+    cards.sort(key=lambda item: item[0])
+
+    for posicao, (total, montagem, itens) in enumerate(cards, start=1):
+        titulo = f"{posicao}. {montagem['nome']} — {formatar_real(total)}"
+
+        with st.expander(titulo, expanded=posicao == 1):
+            st.write(f"**Categoria:** {montagem['faixa']}")
+            if montagem.get("descricao"):
+                st.write(montagem["descricao"])
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total", formatar_real(total))
+            c2.metric("Itens", sum(int(i["quantidade"]) for i in itens))
+
+            orc = montagem.get("orcamento")
+            if orc:
+                saldo = float(orc) - total
+                c3.metric(
+                    "Saldo do orçamento",
+                    formatar_real(saldo),
+                    delta=f"{saldo:+.2f}",
+                )
             else:
-                criar_montagem(
-                    nome_montagem.strip(),
-                    faixa,
-                    descricao.strip(),
+                c3.metric("Orçamento", "Sem limite")
+
+            avisos = verificar_compatibilidade(itens)
+            erros_comp = [a for a in avisos if a[0] == "erro"]
+            if erros_comp:
+                st.error(
+                    "Há incompatibilidades nesta montagem. "
+                    "Veja a aba Compatibilidade."
                 )
-                st.success("Montagem criada.")
-                st.rerun()
 
-        montagens = listar_montagens()
+            for item in itens:
+                peca_item = item.get("pecas")
+                if not peca_item:
+                    continue
 
-        cards = []
-        for montagem in montagens:
-            itens = listar_pecas_montagem(montagem["id"])
-            total = sum(
-                float(item["pecas"]["preco"]) * int(item["quantidade"])
-                for item in itens
-                if item.get("pecas")
-            )
-            cards.append((total, montagem, itens))
+                a, b, c = st.columns([5, 2, 1])
+                a.write(
+                    f"**{peca_item['tipo']}** — {peca_item['nome']} "
+                    f"({peca_item['loja']})"
+                )
+                b.write(
+                    f"{item['quantidade']} × "
+                    f"{formatar_real(peca_item['preco'])}"
+                )
 
-        cards.sort(key=lambda item: item[0])
+                if c.button(
+                    "Remover",
+                    key=f"rm_{montagem['id']}_{item['id']}",
+                ):
+                    remover_peca_montagem(item["id"])
+                    st.rerun()
 
-        if not cards:
-            st.info("Crie sua primeira montagem de PC.")
-
-        for posicao, (total, montagem, itens) in enumerate(cards, start=1):
-            titulo = (
-                f"{posicao}. {montagem['nome']} — {formatar_real(total)}"
-            )
-
-            with st.expander(titulo, expanded=posicao == 1):
-                st.write(f"**Categoria:** {montagem['faixa']}")
-                if montagem.get("descricao"):
-                    st.write(montagem["descricao"])
-
-                col_total, col_quantidade = st.columns(2)
-                col_total.metric("Total atual", formatar_real(total))
-                col_quantidade.metric("Itens", sum(int(i["quantidade"]) for i in itens))
-
-                st.markdown("#### Peças desta montagem")
-
-                if not itens:
-                    st.info("Nenhuma peça adicionada nesta montagem.")
-
-                for item in itens:
-                    peca = item.get("pecas")
-                    if not peca:
-                        continue
-
-                    c1, c2, c3 = st.columns([5, 2, 1])
-                    c1.write(
-                        f"**{peca['tipo']}** — {peca['nome']} ({peca['loja']})"
-                    )
-                    c2.write(
-                        f"{item['quantidade']} × {formatar_real(peca['preco'])}"
-                    )
-
-                    if c3.button(
-                        "Remover",
-                        key=f"remover_{montagem['id']}_{item['id']}",
-                    ):
-                        remover_peca_montagem(item["id"])
-                        st.rerun()
-
-                st.markdown("#### Adicionar peça")
-
-                if pecas:
-                    opcoes = {
-                        f"{p['tipo']} — {p['nome']} — {p['loja']} — {formatar_real(p['preco'])}": p["id"]
-                        for p in pecas
-                    }
-
-                    escolha = st.selectbox(
-                        "Escolha uma peça do catálogo",
-                        list(opcoes.keys()),
-                        key=f"select_peca_{montagem['id']}",
-                    )
-
-                    quantidade = st.number_input(
-                        "Quantidade",
-                        min_value=1,
-                        max_value=20,
-                        value=1,
-                        step=1,
-                        key=f"qtd_{montagem['id']}",
-                    )
-
-                    if st.button(
-                        "Adicionar à montagem",
-                        key=f"add_{montagem['id']}",
-                        use_container_width=True,
-                    ):
-                        adicionar_peca_montagem(
-                            montagem["id"],
-                            opcoes[escolha],
-                            int(quantidade),
-                        )
-                        st.rerun()
-                else:
-                    st.info("Cadastre peças primeiro na aba Peças.")
+            if pecas:
+                nomes = {
+                    f"{p['tipo']} — {p['nome']} — {formatar_real(p['preco'])}": p["id"]
+                    for p in pecas
+                }
+                escolha = st.selectbox(
+                    "Adicionar peça",
+                    list(nomes.keys()),
+                    key=f"add_select_{montagem['id']}",
+                )
+                qtd = st.number_input(
+                    "Quantidade",
+                    min_value=1,
+                    max_value=20,
+                    value=1,
+                    key=f"qtd_{montagem['id']}",
+                )
 
                 if st.button(
-                    "Excluir montagem",
-                    key=f"excluir_montagem_{montagem['id']}",
+                    "Adicionar à montagem",
+                    key=f"add_btn_{montagem['id']}",
+                    use_container_width=True,
                 ):
-                    excluir_montagem(montagem["id"])
+                    adicionar_peca_montagem(
+                        montagem["id"],
+                        nomes[escolha],
+                        int(qtd),
+                    )
                     st.rerun()
+
+            if st.button(
+                "Excluir montagem",
+                key=f"del_build_{montagem['id']}",
+            ):
+                excluir_montagem(montagem["id"])
+                st.rerun()
+
+
+with aba_compatibilidade:
+    st.subheader("Compatibilidade")
+
+    montagens = listar_montagens()
+
+    if not montagens:
+        st.info("Crie uma montagem primeiro.")
+    else:
+        opcoes_m = {m["nome"]: m for m in montagens}
+        escolha_m = st.selectbox(
+            "Montagem",
+            list(opcoes_m.keys()),
+            key="compat_montagem",
+        )
+        montagem = opcoes_m[escolha_m]
+        itens = listar_pecas_montagem(montagem["id"])
+        avisos = verificar_compatibilidade(itens)
+
+        for nivel, mensagem in avisos:
+            if nivel == "ok":
+                st.success(mensagem)
+            elif nivel == "erro":
+                st.error(mensagem)
+            else:
+                st.warning(mensagem)
+
+        st.caption(
+            "A checagem depende dos dados técnicos cadastrados. "
+            "Ela ajuda a encontrar conflitos óbvios, mas não substitui a ficha técnica do fabricante."
+        )
 
 
 with aba_historico:
     st.subheader("Histórico de preços")
 
     if not pecas:
-        st.info("Cadastre uma peça para começar a registrar preços.")
+        st.info("Cadastre uma peça primeiro.")
     else:
-        opcoes_historico = {
+        opcoes_h = {
             f"{p['nome']} — {p['loja']}": p["id"]
             for p in pecas
         }
-
-        escolha = st.selectbox(
-            "Escolha uma peça",
-            list(opcoes_historico.keys()),
-            key="historico_peca",
+        escolha_h = st.selectbox(
+            "Peça",
+            list(opcoes_h.keys()),
+            key="historico",
         )
 
-        historico = pegar_historico(opcoes_historico[escolha])
+        historico = pegar_historico(opcoes_h[escolha_h])
 
         if not historico:
-            st.info("Ainda não há histórico para essa peça.")
+            st.info("Ainda não há histórico.")
         else:
             dados = pd.DataFrame(historico)
             dados["preco"] = dados["preco"].astype(float)
             dados["data"] = pd.to_datetime(dados["data"], utc=True)
             dados = dados.sort_values("data")
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Preço atual", formatar_real(dados.iloc[-1]["preco"]))
-            col2.metric("Menor registrado", formatar_real(dados["preco"].min()))
-            col3.metric("Maior registrado", formatar_real(dados["preco"].max()))
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Atual", formatar_real(dados.iloc[-1]["preco"]))
+            c2.metric("Menor", formatar_real(dados["preco"].min()))
+            c3.metric("Maior", formatar_real(dados["preco"].max()))
 
             st.line_chart(
                 dados.set_index("data")[["preco"]],
@@ -554,6 +628,69 @@ with aba_historico:
 
             st.dataframe(
                 tabela.iloc[::-1],
-                use_container_width=True,
                 hide_index=True,
+                use_container_width=True,
             )
+
+
+with aba_alertas:
+    st.subheader("Alertas de preço")
+
+    if pecas:
+        opcoes_a = {
+            f"{p['nome']} — atual {formatar_real(p['preco'])}": p["id"]
+            for p in pecas
+        }
+
+        with st.form("novo_alerta", clear_on_submit=True):
+            escolha_a = st.selectbox("Peça", list(opcoes_a.keys()))
+            alvo = st.number_input(
+                "Avisar quando chegar a",
+                min_value=0.0,
+                step=50.0,
+                format="%.2f",
+            )
+            salvar_alerta = st.form_submit_button(
+                "Criar alerta",
+                use_container_width=True,
+            )
+
+        if salvar_alerta and alvo > 0:
+            criar_alerta(opcoes_a[escolha_a], alvo)
+            st.rerun()
+
+    alertas = listar_alertas()
+
+    if not alertas:
+        st.info("Nenhum alerta ativo.")
+
+    for alerta in alertas:
+        peca_alerta = alerta.get("pecas") or {}
+        atual = float(peca_alerta.get("preco") or 0)
+        alvo = float(alerta["preco_alvo"])
+        atingido = atual <= alvo
+
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([4, 2, 1])
+
+            c1.write(f"**{peca_alerta.get('nome', 'Peça')}**")
+            c1.write(
+                "Meta:",
+                formatar_real(alvo),
+                "• Atual:",
+                formatar_real(atual),
+            )
+
+            if atingido:
+                c2.success("🔥 Meta atingida")
+            else:
+                c2.info(
+                    f"Faltam {formatar_real(max(atual - alvo, 0))}"
+                )
+
+            if c3.button(
+                "Excluir",
+                key=f"alerta_{alerta['id']}",
+            ):
+                excluir_alerta(alerta["id"])
+                st.rerun()
