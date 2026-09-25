@@ -1,45 +1,82 @@
-from banco import listar_pecas, atualizar_preco
+from banco import (
+    aplicar_melhor_oferta,
+    listar_ofertas,
+    listar_pecas,
+    marcar_oferta_indisponivel,
+    salvar_oferta,
+)
 from precos import buscar_preco
 
 
 def main():
     pecas = listar_pecas()
 
-    sucessos = 0
-    alteracoes = 0
+    consultadas = 0
+    alteradas = 0
     erros = 0
 
     for peca in pecas:
-        try:
-            preco_antigo = float(peca["preco"])
-            preco_novo = buscar_preco(peca["link"])
+        ofertas = listar_ofertas(peca["id"])
 
-            alterou = atualizar_preco(
-                peca["id"],
-                preco_novo,
-            )
+        if ofertas:
+            for oferta in ofertas:
+                try:
+                    novo_preco = buscar_preco(oferta["link"])
 
-            sucessos += 1
+                    salvar_oferta(
+                        peca["id"],
+                        oferta["loja"],
+                        oferta["link"],
+                        novo_preco,
+                        oferta.get("frete") or 0,
+                        "automatico",
+                        oferta.get("vendedor"),
+                        oferta.get("produto_nome"),
+                        oferta.get("identificador_externo"),
+                        oferta.get("correspondencia"),
+                    )
+                    consultadas += 1
+                except Exception as erro:
+                    erros += 1
+                    print(
+                        f"Oferta não atualizada: {peca['nome']} / "
+                        f"{oferta['loja']}: {erro}"
+                    )
 
-            if alterou:
-                alteracoes += 1
+            try:
+                melhor = aplicar_melhor_oferta(peca["id"])
+                alteradas += 1
                 print(
-                    f"{peca['nome']}: "
-                    f"{preco_antigo:.2f} -> {preco_novo:.2f}"
+                    f"{peca['nome']}: melhor oferta "
+                    f"{melhor['loja']} = {float(melhor['preco_final']):.2f}"
                 )
-            else:
-                print(
-                    f"{peca['nome']}: preço continua em {preco_novo:.2f}"
-                )
+            except Exception as erro:
+                erros += 1
+                print(f"Erro aplicando melhor oferta em {peca['nome']}: {erro}")
 
-        except Exception as erro:
-            erros += 1
-            print(f"Erro em {peca['nome']}: {erro}")
+        else:
+            try:
+                novo_preco = buscar_preco(peca["link"])
+                salvar_oferta(
+                    peca["id"],
+                    peca["loja"],
+                    peca["link"],
+                    novo_preco,
+                    0,
+                    "automatico",
+                    produto_nome=peca["nome"],
+                    correspondencia=1.0,
+                )
+                aplicar_melhor_oferta(peca["id"])
+                consultadas += 1
+            except Exception as erro:
+                erros += 1
+                print(f"Erro atualizando {peca['nome']}: {erro}")
 
     print()
     print("Atualização terminada.")
-    print("Consultadas:", sucessos)
-    print("Alteradas:", alteracoes)
+    print("Ofertas consultadas:", consultadas)
+    print("Peças recalculadas:", alteradas)
     print("Erros:", erros)
 
 
