@@ -13,6 +13,10 @@ from banco import (
     listar_pecas_montagem,
     pegar_historico,
     remover_peca_montagem,
+    listar_ofertas,
+    salvar_oferta,
+    excluir_oferta,
+    aplicar_melhor_oferta,
 )
 from precos import buscar_preco
 
@@ -63,8 +67,8 @@ st.set_page_config(
 st.title("🖥️ PC Price Tracker")
 st.caption("Peças, montagens e histórico de preços em um só lugar.")
 
-aba_pecas, aba_montagens, aba_historico = st.tabs(
-    ["Peças", "Montagens", "Histórico"]
+aba_pecas, aba_comparador, aba_montagens, aba_historico = st.tabs(
+    ["Peças", "Comparador", "Montagens", "Histórico"]
 )
 
 pecas = listar_pecas()
@@ -188,6 +192,169 @@ with aba_pecas:
                 ):
                     excluir_peca(peca["id"])
                     st.rerun()
+
+
+with aba_comparador:
+    st.subheader("Comparador de preços")
+    st.caption(
+        "Acompanhe várias ofertas da mesma peça e escolha automaticamente a mais barata."
+    )
+
+    if not pecas:
+        st.info("Cadastre uma peça primeiro na aba Peças.")
+    else:
+        opcoes_pecas = {
+            f"{p['tipo']} — {p['nome']}": p
+            for p in pecas
+        }
+
+        escolha_peca = st.selectbox(
+            "Peça para comparar",
+            list(opcoes_pecas.keys()),
+            key="comparador_peca",
+        )
+
+        peca_selecionada = opcoes_pecas[escolha_peca]
+
+        try:
+            ofertas = listar_ofertas(peca_selecionada["id"])
+            banco_ofertas_ok = True
+        except Exception:
+            ofertas = []
+            banco_ofertas_ok = False
+
+        if not banco_ofertas_ok:
+            st.warning(
+                "A tabela de ofertas ainda não existe no Supabase. "
+                "Execute migrations/003_ofertas.sql no SQL Editor."
+            )
+        else:
+            with st.form("form_nova_oferta", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    loja_oferta = st.text_input("Loja")
+                    link_oferta = st.text_input("Link da oferta")
+
+                with c2:
+                    frete_oferta = st.number_input(
+                        "Frete (opcional)",
+                        min_value=0.0,
+                        value=0.0,
+                        step=5.0,
+                        format="%.2f",
+                    )
+                    preco_manual = st.number_input(
+                        "Preço manual (0 = tentar buscar automaticamente)",
+                        min_value=0.0,
+                        value=0.0,
+                        step=10.0,
+                        format="%.2f",
+                    )
+
+                adicionar_oferta = st.form_submit_button(
+                    "Adicionar oferta",
+                    use_container_width=True,
+                )
+
+            if adicionar_oferta:
+                if not loja_oferta.strip() or not link_oferta.strip():
+                    st.warning("Preencha loja e link.")
+                else:
+                    try:
+                        if preco_manual > 0:
+                            preco_encontrado = preco_manual
+                            origem = "manual"
+                        else:
+                            preco_encontrado = buscar_preco(link_oferta.strip())
+                            origem = "automatico"
+
+                        salvar_oferta(
+                            peca_selecionada["id"],
+                            loja_oferta.strip(),
+                            link_oferta.strip(),
+                            preco_encontrado,
+                            frete_oferta,
+                            origem,
+                        )
+                        st.success("Oferta adicionada.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Não foi possível adicionar a oferta: {erro}")
+
+            ofertas = listar_ofertas(peca_selecionada["id"])
+
+            if ofertas:
+                melhor = ofertas[0]
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Menor preço", formatar_real(melhor["preco"]))
+                c2.metric("Frete", formatar_real(melhor["frete"]))
+                c3.metric("Total", formatar_real(melhor["preco_final"]))
+
+                if st.button(
+                    "Usar menor oferta na montagem",
+                    use_container_width=True,
+                    key=f"aplicar_melhor_{peca_selecionada['id']}",
+                ):
+                    aplicar_melhor_oferta(peca_selecionada["id"])
+                    st.success("Menor oferta aplicada à peça.")
+                    st.rerun()
+
+                st.divider()
+
+            if not ofertas:
+                st.info("Ainda não há ofertas cadastradas para esta peça.")
+
+            for posicao, oferta in enumerate(ofertas, start=1):
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([4, 2, 2])
+
+                    with c1:
+                        selo = " 🏆" if posicao == 1 else ""
+                        st.markdown(f"### {oferta['loja']}{selo}")
+                        st.link_button(
+                            "Abrir oferta",
+                            oferta["link"],
+                            use_container_width=True,
+                        )
+                        st.caption(
+                            f"Origem: {oferta['origem']} • "
+                            f"Atualizado: {oferta['atualizado_em']}"
+                        )
+
+                    with c2:
+                        st.write("Produto:", formatar_real(oferta["preco"]))
+                        st.write("Frete:", formatar_real(oferta["frete"]))
+                        st.metric("Total", formatar_real(oferta["preco_final"]))
+
+                    with c3:
+                        if st.button(
+                            "Atualizar",
+                            key=f"atualizar_oferta_{oferta['id']}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                novo_preco = buscar_preco(oferta["link"])
+                                salvar_oferta(
+                                    peca_selecionada["id"],
+                                    oferta["loja"],
+                                    oferta["link"],
+                                    novo_preco,
+                                    oferta["frete"],
+                                    "automatico",
+                                )
+                                st.rerun()
+                            except Exception as erro:
+                                st.error(str(erro))
+
+                        if st.button(
+                            "Excluir",
+                            key=f"excluir_oferta_{oferta['id']}",
+                            use_container_width=True,
+                        ):
+                            excluir_oferta(oferta["id"])
+                            st.rerun()
 
 
 with aba_montagens:
