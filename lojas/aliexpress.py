@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import requests
@@ -95,7 +95,7 @@ def buscar_aliexpress(termo, alvo=None, limite=10):
         "app_key": app_key,
         "format": "json",
         "sign_method": "hmac",
-        "timestamp": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"),
         "v": "2.0",
         "keywords": termo,
         "page_no": "1",
