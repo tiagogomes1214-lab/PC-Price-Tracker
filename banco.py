@@ -264,3 +264,128 @@ def remover_peca_montagem(item_id):
         .eq("id", item_id)
         .execute()
     )
+
+
+
+def listar_ofertas(peca_id):
+    supabase = conectar()
+
+    resposta = (
+        supabase
+        .table("ofertas")
+        .select("*")
+        .eq("peca_id", peca_id)
+        .eq("disponivel", True)
+        .order("preco_final")
+        .execute()
+    )
+
+    return resposta.data
+
+
+def salvar_oferta(
+    peca_id,
+    loja,
+    link,
+    preco,
+    frete=0,
+    origem="manual",
+    vendedor=None,
+):
+    supabase = conectar()
+    agora = datetime.now(timezone.utc).isoformat()
+
+    preco = float(preco)
+    frete = float(frete or 0)
+
+    dados = {
+        "peca_id": peca_id,
+        "loja": loja,
+        "link": link,
+        "preco": preco,
+        "frete": frete,
+        "preco_final": preco + frete,
+        "disponivel": True,
+        "origem": origem,
+        "vendedor": vendedor,
+        "atualizado_em": agora,
+    }
+
+    (
+        supabase
+        .table("ofertas")
+        .upsert(
+            dados,
+            on_conflict="peca_id,link",
+        )
+        .execute()
+    )
+
+
+def excluir_oferta(oferta_id):
+    supabase = conectar()
+
+    (
+        supabase
+        .table("ofertas")
+        .delete()
+        .eq("id", oferta_id)
+        .execute()
+    )
+
+
+def aplicar_melhor_oferta(peca_id):
+    supabase = conectar()
+
+    ofertas = listar_ofertas(peca_id)
+
+    if not ofertas:
+        raise ValueError("Nenhuma oferta disponível para essa peça.")
+
+    melhor = ofertas[0]
+
+    resposta_atual = (
+        supabase
+        .table("pecas")
+        .select("preco")
+        .eq("id", peca_id)
+        .limit(1)
+        .execute()
+    )
+
+    preco_antigo = None
+    if resposta_atual.data:
+        preco_antigo = float(resposta_atual.data[0]["preco"])
+
+    agora = datetime.now(timezone.utc).isoformat()
+
+    (
+        supabase
+        .table("pecas")
+        .update(
+            {
+                "loja": melhor["loja"],
+                "link": melhor["link"],
+                "preco": float(melhor["preco"]),
+                "atualizado_em": agora,
+            }
+        )
+        .eq("id", peca_id)
+        .execute()
+    )
+
+    if preco_antigo is None or abs(preco_antigo - float(melhor["preco"])) >= 0.01:
+        (
+            supabase
+            .table("historico")
+            .insert(
+                {
+                    "peca_id": peca_id,
+                    "preco": float(melhor["preco"]),
+                    "data": agora,
+                }
+            )
+            .execute()
+        )
+
+    return melhor
