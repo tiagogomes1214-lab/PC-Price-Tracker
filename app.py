@@ -24,6 +24,7 @@ from banco import (
 from buscador import PROVEDORES, buscar_ofertas
 from compatibilidade import verificar_compatibilidade
 from precos import buscar_preco
+from ui import aplicar_estilo, barra_orcamento, hero, kpi, titulo_secao
 
 
 TIPOS = [
@@ -67,12 +68,11 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🖥️ PC Price Tracker")
-st.caption(
-    "Monte PCs, compare lojas, acompanhe preços e valide compatibilidade."
-)
+aplicar_estilo()
+hero()
 
 (
+    aba_dashboard,
     aba_pecas,
     aba_busca,
     aba_montagens,
@@ -81,20 +81,174 @@ st.caption(
     aba_alertas,
 ) = st.tabs(
     [
-        "Peças",
-        "Buscar preços",
-        "Montagens",
-        "Compatibilidade",
-        "Histórico",
-        "Alertas",
+        "🏠 Dashboard",
+        "🧩 Peças",
+        "🔎 Buscar preços",
+        "🖥️ Montagens",
+        "✅ Compatibilidade",
+        "📈 Histórico",
+        "🔔 Alertas",
     ]
 )
 
 pecas = listar_pecas()
 
 
+with aba_dashboard:
+    montagens_dashboard = listar_montagens()
+    alertas_dashboard = listar_alertas()
+
+    ofertas_dashboard = []
+    for peca_dashboard in pecas:
+        try:
+            for oferta_dashboard in listar_ofertas(peca_dashboard["id"]):
+                ofertas_dashboard.append((peca_dashboard, oferta_dashboard))
+        except Exception:
+            pass
+
+    ofertas_dashboard.sort(
+        key=lambda item: float(item[1].get("preco_final") or 999999999)
+    )
+
+    melhor_global = ofertas_dashboard[0] if ofertas_dashboard else None
+
+    titulo_secao(
+        "Visão geral",
+        "Um resumo rápido do seu catálogo, montagens e oportunidades de preço.",
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        kpi(
+            "🧩",
+            "Peças monitoradas",
+            len(pecas),
+            "Componentes cadastrados",
+        )
+
+    with c2:
+        kpi(
+            "🖥️",
+            "Montagens",
+            len(montagens_dashboard),
+            "PCs salvos no projeto",
+        )
+
+    with c3:
+        kpi(
+            "🔔",
+            "Alertas ativos",
+            len(alertas_dashboard),
+            "Metas de preço acompanhadas",
+        )
+
+    with c4:
+        if melhor_global:
+            _, oferta_melhor = melhor_global
+            kpi(
+                "🏆",
+                "Menor oferta",
+                formatar_real(oferta_melhor["preco_final"]),
+                oferta_melhor["loja"],
+            )
+        else:
+            kpi(
+                "🏆",
+                "Menor oferta",
+                "—",
+                "Busque ofertas para preencher",
+            )
+
+    if ofertas_dashboard:
+        titulo_secao(
+            "Melhores ofertas",
+            "As menores ofertas encontradas entre as peças monitoradas.",
+        )
+
+        for posicao, (peca_oferta, oferta) in enumerate(
+            ofertas_dashboard[:5],
+            start=1,
+        ):
+            with st.container(border=True):
+                a, b, c = st.columns([5, 2, 2])
+
+                with a:
+                    selo = "🏆" if posicao == 1 else f"#{posicao}"
+                    st.markdown(
+                        f"### {selo} {peca_oferta['nome']}"
+                    )
+                    st.caption(
+                        f"{oferta['loja']} • "
+                        f"{oferta.get('produto_nome') or 'Oferta monitorada'}"
+                    )
+
+                with b:
+                    st.metric(
+                        "Preço final",
+                        formatar_real(oferta["preco_final"]),
+                    )
+                    if float(oferta.get("frete") or 0) > 0:
+                        st.caption(
+                            f"Inclui {formatar_real(oferta['frete'])} de frete"
+                        )
+                    else:
+                        st.caption("Sem frete cadastrado")
+
+                with c:
+                    if oferta.get("link"):
+                        st.link_button(
+                            "Ver oferta",
+                            oferta["link"],
+                            use_container_width=True,
+                        )
+
+    titulo_secao(
+        "Suas montagens",
+        "Acompanhe o valor total e quanto do orçamento cada PC já utiliza.",
+    )
+
+    if not montagens_dashboard:
+        st.info("Você ainda não criou nenhuma montagem.")
+    else:
+        for montagem_dashboard in montagens_dashboard[:6]:
+            itens_dashboard = listar_pecas_montagem(
+                montagem_dashboard["id"]
+            )
+
+            total_dashboard = sum(
+                float(item["pecas"]["preco"]) * int(item["quantidade"])
+                for item in itens_dashboard
+                if item.get("pecas")
+            )
+
+            with st.container(border=True):
+                a, b = st.columns([5, 2])
+
+                with a:
+                    st.markdown(
+                        f"### {montagem_dashboard['nome']}"
+                    )
+                    st.caption(
+                        f"{montagem_dashboard['faixa']} • "
+                        f"{sum(int(i['quantidade']) for i in itens_dashboard)} item(ns)"
+                    )
+
+                    if montagem_dashboard.get("orcamento"):
+                        barra_orcamento(
+                            total_dashboard,
+                            montagem_dashboard["orcamento"],
+                        )
+
+                with b:
+                    st.metric(
+                        "Total atual",
+                        formatar_real(total_dashboard),
+                    )
+
+
 with aba_pecas:
-    st.subheader("Cadastrar componente")
+    titulo_secao("Cadastrar componente", "Adicione uma peça e mantenha modelo, loja e dados técnicos organizados.")
 
     with st.form("nova_peca", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -159,6 +313,7 @@ with aba_pecas:
         cadastrar = st.form_submit_button(
             "Adicionar peça",
             use_container_width=True,
+            type="primary",
         )
 
     if cadastrar:
@@ -262,7 +417,7 @@ with aba_pecas:
 
 
 with aba_busca:
-    st.subheader("Buscar o menor preço em várias lojas")
+    titulo_secao("Buscar preços", "Compare ofertas da mesma peça e use automaticamente a opção mais barata.")
 
     if not pecas:
         st.info("Cadastre uma peça primeiro.")
@@ -292,6 +447,7 @@ with aba_busca:
         if st.button(
             "🔎 Procurar ofertas",
             use_container_width=True,
+            type="primary",
         ):
             with st.spinner("Consultando lojas..."):
                 resultados, erros = buscar_ofertas(
@@ -410,7 +566,7 @@ with aba_busca:
 
 
 with aba_montagens:
-    st.subheader("Montagens de PC")
+    titulo_secao("Montagens de PC", "Crie configurações por orçamento e acompanhe o total em tempo real.")
 
     with st.form("nova_montagem", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -434,6 +590,7 @@ with aba_montagens:
         criar = st.form_submit_button(
             "Criar montagem",
             use_container_width=True,
+            type="primary",
         )
 
     if criar:
@@ -482,6 +639,7 @@ with aba_montagens:
                     formatar_real(saldo),
                     delta=f"{saldo:+.2f}",
                 )
+                barra_orcamento(total, orc)
             else:
                 c3.metric("Orçamento", "Sem limite")
 
@@ -554,7 +712,7 @@ with aba_montagens:
 
 
 with aba_compatibilidade:
-    st.subheader("Compatibilidade")
+    titulo_secao("Compatibilidade", "Verifique conflitos básicos entre processador, placa-mãe, memória, fonte e gabinete.")
 
     montagens = listar_montagens()
 
@@ -586,7 +744,7 @@ with aba_compatibilidade:
 
 
 with aba_historico:
-    st.subheader("Histórico de preços")
+    titulo_secao("Histórico de preços", "Veja como o preço das suas peças mudou ao longo do tempo.")
 
     if not pecas:
         st.info("Cadastre uma peça primeiro.")
@@ -634,7 +792,7 @@ with aba_historico:
 
 
 with aba_alertas:
-    st.subheader("Alertas de preço")
+    titulo_secao("Alertas de preço", "Defina uma meta e acompanhe quando uma peça atingir o valor desejado.")
 
     if pecas:
         opcoes_a = {
