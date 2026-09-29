@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from .comum import numero_preco
+from .comum import numero_preco, preco_generico_url
 
 
 API = "https://eco.taobao.com/router/rest"
@@ -125,7 +125,19 @@ def buscar_aliexpress(termo, alvo=None, limite=10):
 
 
 def preco_aliexpress_url(link):
-    raise RuntimeError(
-        "Atualização por URL do AliExpress ainda depende da API de detalhe; "
-        "use a busca automática para renovar as ofertas."
-    )
+    """
+    Atualiza um produto do AliExpress diretamente pelo link público.
+
+    Não depende da API de afiliados. O leitor procura primeiro os
+    metadados e dados estruturados expostos pela própria página.
+    Se o AliExpress mudar a página ou bloquear a leitura automática,
+    a função retorna erro em vez de gravar um preço duvidoso.
+    """
+    try:
+        return preco_generico_url(link)
+    except Exception as erro:
+        raise ValueError(
+            "Não consegui identificar um preço confiável nesse link do AliExpress. "
+            "Tente abrir o produto no navegador, selecionar a variante desejada e "
+            "salvar o link completo novamente."
+        ) from erro
