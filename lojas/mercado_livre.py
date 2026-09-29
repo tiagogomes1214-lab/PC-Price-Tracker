@@ -4,7 +4,7 @@ from urllib.parse import quote_plus
 
 import requests
 
-from .comum import HEADERS, numero_preco
+from .comum import HEADERS, numero_preco, preco_generico_url
 
 
 API = "https://api.mercadolibre.com"
@@ -76,28 +76,41 @@ def _extrair_item_id(link):
 
 
 def preco_mercado_livre_url(link):
-    item_id = _extrair_item_id(link)
+    """
+    Atualiza um anúncio pelo link público.
 
-    if not item_id:
-        raise ValueError("Não consegui identificar o ID do anúncio do Mercado Livre.")
+    Primeiro tenta extrair o preço diretamente da página, sem exigir token.
+    Se isso falhar e houver um ML_ACCESS_TOKEN configurado, tenta a API oficial.
+    """
 
-    url = f"{API}/items/{item_id}/prices"
-    resposta = requests.get(url, headers=_headers(), timeout=20)
+    try:
+        return preco_generico_url(link)
+    except Exception as erro_pagina:
+        item_id = _extrair_item_id(link)
+        token = os.getenv("ML_ACCESS_TOKEN")
 
-    if resposta.status_code in (401, 403):
-        raise RuntimeError("Defina ML_ACCESS_TOKEN nos secrets.")
+        if not item_id or not token:
+            raise ValueError(
+                "Não consegui identificar um preço confiável nesse link do Mercado Livre. "
+                "Tente usar o link completo do anúncio. Se a página continuar bloqueando "
+                "a leitura, configure ML_ACCESS_TOKEN para usar a API oficial."
+            ) from erro_pagina
 
-    resposta.raise_for_status()
-    dados = resposta.json()
+        url = f"{API}/items/{item_id}/prices"
+        resposta = requests.get(url, headers=_headers(), timeout=20)
+        resposta.raise_for_status()
+        dados = resposta.json()
 
-    valores = [
-        numero_preco(preco.get("amount"))
-        for preco in dados.get("prices", [])
-        if preco.get("amount") is not None
-    ]
-    valores = [v for v in valores if v is not None]
+        valores = [
+            numero_preco(preco.get("amount"))
+            for preco in dados.get("prices", [])
+            if preco.get("amount") is not None
+        ]
+        valores = [v for v in valores if v is not None]
 
-    if not valores:
-        raise ValueError("Preço não retornado pela API do Mercado Livre.")
+        if not valores:
+            raise ValueError(
+                "O Mercado Livre não retornou um preço para esse anúncio."
+            )
 
-    return min(valores)
+        return min(valores)
