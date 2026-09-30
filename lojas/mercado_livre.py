@@ -4,6 +4,11 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
 
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
 from .comum import (
     HEADERS,
     buscar_html,
@@ -17,9 +22,26 @@ from .comum import (
 API = "https://api.mercadolibre.com"
 
 
+def _token():
+    token = _token()
+
+    if token:
+        return token
+
+    if st is not None:
+        try:
+            token = st.secrets.get("ML_ACCESS_TOKEN")
+            if token:
+                return token
+        except Exception:
+            pass
+
+    return None
+
+
 def _headers():
     headers = dict(HEADERS)
-    token = os.getenv("ML_ACCESS_TOKEN")
+    token = _token()
 
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -192,7 +214,7 @@ def _termo_do_catalogo(link):
 
 
 def _preco_catalogo_api(catalog_id):
-    if not os.getenv("ML_ACCESS_TOKEN"):
+    if not _token():
         return None
 
     resposta = requests.get(
@@ -283,7 +305,7 @@ def preco_mercado_livre_url(link):
         try:
             return preco_generico_url(link)
         except Exception as erro_pagina:
-            token = os.getenv("ML_ACCESS_TOKEN")
+            token = _token()
 
             if not token:
                 raise ValueError(
@@ -294,25 +316,21 @@ def preco_mercado_livre_url(link):
                 ) from erro_pagina
 
             resposta = requests.get(
-                f"{API}/items/{item_id}/prices",
+                f"{API}/items/{item_id}/sale_price",
+                params={"context": "channel_marketplace"},
                 headers=_headers(),
                 timeout=20,
             )
             resposta.raise_for_status()
             dados = resposta.json()
 
-            valores = [
-                numero_preco(preco.get("amount"))
-                for preco in dados.get("prices", [])
-                if preco.get("amount") is not None
-            ]
-            valores = [v for v in valores if v is not None]
+            preco = numero_preco(dados.get("amount"))
 
-            if valores:
-                return min(valores)
+            if preco is not None and preco > 0:
+                return preco
 
             raise ValueError(
-                "O Mercado Livre identificou o anúncio, mas não retornou preço."
+                "O Mercado Livre identificou o anúncio, mas não retornou o preço de venda."
             )
 
     catalog_id = _extrair_catalog_product_id(link)
