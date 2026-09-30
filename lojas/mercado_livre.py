@@ -1,6 +1,6 @@
 import os
 import re
-from urllib.parse import quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
 
@@ -82,15 +82,106 @@ def _extrair_catalog_product_id(link):
     return match.group(1).upper()
 
 
-def _extrair_item_id(link):
-    if _extrair_catalog_product_id(link):
-        return None
+def _normalizar_item_id(valor):
+    match = re.search(r"(MLB[-_]?\d{8,})", str(valor or "").upper())
 
-    match = re.search(r"(MLB[-_]?\d{8,})", link.upper())
     if not match:
         return None
 
     return match.group(1).replace("-", "").replace("_", "")
+
+
+def _extrair_item_id(link):
+    """
+    Tenta encontrar o ID do anúncio específico.
+
+    Suporta links com:
+    - ?wid=MLB123...
+    - ?item_id=MLB123...
+    - ?pdp_filters=item_id:MLB123...
+    - fragmentos que carreguem os mesmos parâmetros
+    - links tradicionais de anúncio contendo MLB123... no próprio caminho
+    """
+
+    parsed = urlparse(link)
+
+    blocos_parametros = [
+        parse_qs(parsed.query),
+        parse_qs(parsed.fragment),
+    ]
+
+    for parametros in blocos_parametros:
+        for chave in ("wid", "item_id"):
+            for valor in parametros.get(chave, []):
+                item_id = _normalizar_item_id(valor)
+                if item_id:
+                    return item_id
+
+        for valor in parametros.get("pdp_filters", []):
+            match = re.search(
+                r"item_id\s*[:=]\s*(MLB[-_]?\d{8,})",
+                unquote(valor),
+                re.IGNORECASE,
+            )
+            if match:
+                return _normalizar_item_id(match.group(1))
+
+    texto_extra = unquote(
+        " ".join(
+            [
+                parsed.query or "",
+                parsed.fragment or "",
+            ]
+        )
+    )
+
+    match = re.search(
+        r"(?:wid|item_id)\s*[:=]\s*(MLB[-_]?\d{8,})",
+        texto_extra,
+        re.IGNORECASE,
+    )
+    if match:
+        return _normalizar_item_id(match.group(1))
+
+    match = re.search(
+        r"pdp_filters[^#&]*item_id(?:%3A|:|=)(MLB[-_]?\d{8,})",
+        link,
+        re.IGNORECASE,
+    )
+    if match:
+        return _normalizar_item_id(match.group(1))
+
+    # Em páginas /p/ o MLB do caminho é o ID do catálogo, não do anúncio.
+    if _extrair_catalog_product_id(link):
+        return None
+
+    return _normalizar_item_id(link)
+
+
+def _preco_item_api_publica(item_id):
+    """
+    Tenta consultar os dados públicos do anúncio pelo ID.
+    Não exige token quando o endpoint estiver disponível publicamente.
+    """
+
+    resposta = requests.get(
+        f"{API}/items/{item_id}",
+        headers=HEADERS,
+        timeout=20,
+    )
+
+    if resposta.status_code in (401, 403, 404):
+        return None
+
+    resposta.raise_for_status()
+    dados = resposta.json()
+
+    preco = numero_preco(dados.get("price"))
+
+    if preco is None or preco <= 0:
+        return None
+
+    return preco
 
 
 def _termo_do_catalogo(link):
@@ -176,8 +267,53 @@ def _preco_catalogo_busca_publica(link):
 
 def preco_mercado_livre_url(link):
     """
-    Aceita tanto anúncio individual quanto página de produto de catálogo.
+    Aceita anúncio individual, página de catálogo e catálogo com oferta específica.
     """
+
+    item_id = _extrair_item_id(link)
+
+    if item_id:
+        # Links de catálogo podem carregar um anúncio específico via wid/item_id.
+        # Quando isso acontece, acompanhamos esse anúncio em vez do catálogo inteiro.
+        preco_item = _preco_item_api_publica(item_id)
+
+        if preco_item is not None:
+            return preco_item
+
+        try:
+            return preco_generico_url(link)
+        except Exception as erro_pagina:
+            token = os.getenv("ML_ACCESS_TOKEN")
+
+            if not token:
+                raise ValueError(
+                    "Encontrei o anúncio específico do Mercado Livre, mas não consegui "
+                    "ler o preço automaticamente. O ID encontrado foi "
+                    f"{item_id}. Tente copiar novamente pelo botão Compartilhar do "
+                    "Mercado Livre ou configure ML_ACCESS_TOKEN."
+                ) from erro_pagina
+
+            resposta = requests.get(
+                f"{API}/items/{item_id}/prices",
+                headers=_headers(),
+                timeout=20,
+            )
+            resposta.raise_for_status()
+            dados = resposta.json()
+
+            valores = [
+                numero_preco(preco.get("amount"))
+                for preco in dados.get("prices", [])
+                if preco.get("amount") is not None
+            ]
+            valores = [v for v in valores if v is not None]
+
+            if valores:
+                return min(valores)
+
+            raise ValueError(
+                "O Mercado Livre identificou o anúncio, mas não retornou preço."
+            )
 
     catalog_id = _extrair_catalog_product_id(link)
 
@@ -210,37 +346,12 @@ def preco_mercado_livre_url(link):
             "anúncio/vendedor específico ou configure ML_ACCESS_TOKEN."
         )
 
-    # Anúncio individual: tenta a página pública primeiro.
+    # Link sem ID identificável: último recurso pela página pública.
     try:
         return preco_generico_url(link)
     except Exception as erro_pagina:
-        item_id = _extrair_item_id(link)
-        token = os.getenv("ML_ACCESS_TOKEN")
-
-        if not item_id or not token:
-            raise ValueError(
-                "Não consegui identificar um preço confiável nesse anúncio do "
-                "Mercado Livre. Tente usar o link completo do anúncio."
-            ) from erro_pagina
-
-        resposta = requests.get(
-            f"{API}/items/{item_id}/prices",
-            headers=_headers(),
-            timeout=20,
-        )
-        resposta.raise_for_status()
-        dados = resposta.json()
-
-        valores = [
-            numero_preco(preco.get("amount"))
-            for preco in dados.get("prices", [])
-            if preco.get("amount") is not None
-        ]
-        valores = [v for v in valores if v is not None]
-
-        if not valores:
-            raise ValueError(
-                "O Mercado Livre não retornou um preço para esse anúncio."
-            )
-
-        return min(valores)
+        raise ValueError(
+            "Não consegui identificar um anúncio específico nem um preço confiável "
+            "nesse link do Mercado Livre. Use o botão Compartilhar da oferta para "
+            "copiar um link que contenha wid, item_id ou o ID MLB do anúncio."
+        ) from erro_pagina
